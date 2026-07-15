@@ -89,6 +89,20 @@
   }
   .linkbox button{margin:0; padding:6px 12px; font-size:12px; flex-shrink:0;}
   .poolcount{font-size:11px; color:var(--muted); text-align:center; margin-bottom:10px;}
+  @media (max-width: 480px){
+    body{padding:16px 8px 40px;}
+    h1{font-size:22px;}
+    .row, .slot-row{gap:6px;}
+    .card, .slot{width:56px; height:76px; border-radius:8px;}
+    .card .tag{font-size:7px; padding:1px 0;}
+    .slot .num{width:16px; height:16px; font-size:9px; top:-8px;}
+    .arena{gap:12px;}
+    .score{gap:8px; padding:8px 10px; font-size:12px;}
+    .score b{font-size:15px;}
+  }
+  @media (max-width: 380px){
+    .card, .slot{width:48px; height:66px;}
+  }
 </style>
 </head>
 <body>
