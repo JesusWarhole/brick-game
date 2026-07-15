@@ -88,7 +88,7 @@
     border-radius:8px; padding:8px 10px; margin:12px 0; word-break:break-all; font-size:12px; color:var(--muted);
   }
   .linkbox button{margin:0; padding:6px 12px; font-size:12px; flex-shrink:0;}
-  .divider{color:var(--muted); font-size:12px; margin:16px 0; letter-spacing:1px;}
+  .poolcount{font-size:11px; color:var(--muted); text-align:center; margin-bottom:10px;}
 </style>
 </head>
 <body>
@@ -132,15 +132,14 @@ function beats(a,b){
   return wins[a]===b ? "win" : "lose";
 }
 
-function makeBoard(){
-  const pool = [];
+function makePersonalPool(){
   const types = ["Rock","Paper","Scissors"];
-  for(let i=0;i<3;i++){ types.forEach(t=>pool.push(t)); }
-  pool.push("Brick","Brick");
-  for(let i=pool.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [pool[i],pool[j]]=[pool[j],pool[i]]; }
-  const board = {};
-  pool.forEach((t,i)=>{ board["c"+i] = { type: t, takenBy: null }; });
-  return board;
+  const pool = { c0: { type: "Brick" } };
+  for(let i=1;i<=15;i++){
+    const t = types[Math.floor(Math.random()*3)];
+    pool["c"+i] = { type: t };
+  }
+  return pool;
 }
 
 function roomCode(){
@@ -158,7 +157,6 @@ let me = null;
 let opp = null;
 let room = null;
 let roomRef = null;
-let unsub = null;
 
 if(urlRoom){
   renderJoinLobby(urlRoom.toUpperCase());
@@ -184,10 +182,9 @@ function createRoom(){
   me = "p1"; opp = "p2";
   roomRef = db.ref("rooms/" + room);
   roomRef.set({
-    board: makeBoard(),
     phase: "waiting",
     round: 0,
-    players: { p1: { joined:true, ready5:false, seqReady:false } }
+    players: { p1: { joined:true, pool: makePersonalPool(), ready5:false, seqReady:false } }
   }).then(()=>{
     const link = location.origin + location.pathname + "?room=" + room;
     stage.innerHTML = "";
@@ -230,21 +227,12 @@ function joinRoom(code){
       stage.innerHTML = `<div class="lobby"><div class="phase-label">Δεν βρέθηκε δωμάτιο</div><div class="hint">Έλεγξε το link ή ζήτα νέο από τον φίλο σου.</div></div>`;
       return;
     }
-    roomRef.child("players/p2").set({ joined:true, ready5:false, seqReady:false }).then(()=>{
+    roomRef.child("players/p2").set({ joined:true, pool: makePersonalPool(), ready5:false, seqReady:false }).then(()=>{
       roomRef.child("phase").transaction(cur => cur === "waiting" ? "draft" : cur);
       listenRoom();
     });
   });
 }
-
-function myHandFromBoard(board){
-  return Object.keys(board).filter(id=>board[id].takenBy===me).map(id=>({id, type:board[id].type}));
-}
-function oppHandFromBoard(board){
-  return Object.keys(board).filter(id=>board[id].takenBy===opp).map(id=>({id, type:board[id].type}));
-}
-
-let lastPhase = null;
 
 function listenRoom(){
   roomRef.on("value", snap=>{
@@ -257,74 +245,49 @@ function listenRoom(){
 function render(data){
   const phase = data.phase;
   const players = data.players || {};
-  const board = data.board || {};
 
   if(phase !== "battle" && phase !== "done"){ scoreBar.style.display = "none"; }
 
-  if(phase === "waiting"){
-    return;
-  }
-
-  if(phase === "draft"){
-    scoreBar.style.display = "none";
-    renderDraft(board, players);
-    return;
-  }
-
-  if(phase === "sequence"){
-    renderSequence(board, players);
-    return;
-  }
-
-  if(phase === "battle"){
-    scoreBar.style.display = "flex";
-    renderBattle(data);
-    return;
-  }
-
-  if(phase === "done"){
-    scoreBar.style.display = "flex";
-    renderFinal(data);
-    return;
-  }
+  if(phase === "waiting") return;
+  if(phase === "draft"){ renderDraft(players); return; }
+  if(phase === "sequence"){ renderSequence(players); return; }
+  if(phase === "battle"){ scoreBar.style.display = "flex"; renderBattle(data); return; }
+  if(phase === "done"){ scoreBar.style.display = "flex"; renderFinal(data); return; }
 }
 
-function renderDraft(board, players){
-  const myHand = myHandFromBoard(board);
-  const brickPicked = myHand.some(c=>c.type==="Brick");
-  const iAmReady = players[me] && players[me].ready5;
+function renderDraft(players){
+  const myPlayer = players[me];
+  const pool = myPlayer.pool || {};
+  const myHandIds = myPlayer.handIds || [];
+  const brickPicked = myHandIds.some(id=>pool[id] && pool[id].type==="Brick");
+  const iAmReady = myPlayer.ready5;
 
   stage.innerHTML = "";
   const label = document.createElement("div");
   label.className = "phase-label";
-  label.textContent = "Draft — διάλεξε 5 κάρτες (max 1 Brick)";
+  label.textContent = "Draft — διάλεξε 5 κάρτες (max 1 Brick) από το δικό σου deck";
   stage.appendChild(label);
 
   const hint = document.createElement("div");
   hint.className = "hint";
-  hint.textContent = "Κοινή τράπουλα — ό,τι πάρεις εσύ, δεν το βλέπει πλέον ο αντίπαλος. Μόλις διαλέξεις 5, περιμένεις να τελειώσει κι εκείνος.";
+  hint.textContent = "Το deck σου είναι δικό σου — δεν το μοιράζεσαι με τον αντίπαλο. 1 Brick + 15 τυχαίες κάρτες Rock/Paper/Scissors.";
   stage.appendChild(hint);
 
   const row = document.createElement("div");
   row.className = "row";
-  Object.keys(board).forEach(id=>{
-    const c = board[id];
-    if(c.takenBy) return;
+  Object.keys(pool).forEach(id=>{
+    if(myHandIds.includes(id)) return;
+    const c = pool[id];
     const disabled = iAmReady || (c.type==="Brick" && brickPicked);
     const el = document.createElement("div");
     el.className = "card" + (disabled?" disabled":"");
     el.innerHTML = `<img src="${CARD_IMG[c.type]}" alt="${c.type}"><div class="tag">${c.type}</div>`;
     el.onclick = ()=>{
       if(disabled) return;
-      roomRef.child("board/"+id+"/takenBy").transaction(cur=>{
-        if(cur) return; // already taken, abort
-        return me;
-      }, (err, committed, snap)=>{
-        if(committed && snap.val()===me){
-          const newHandCount = myHand.length + 1;
-          if(newHandCount>=5){
-            roomRef.child("players/"+me+"/ready5").set(true);
-          }
+      const newHand = myHandIds.concat([id]);
+      roomRef.child("players/"+me+"/handIds").set(newHand).then(()=>{
+        if(newHand.length>=5){
+          roomRef.child("players/"+me+"/ready5").set(true);
         }
       });
     };
@@ -342,12 +305,13 @@ function renderDraft(board, players){
   for(let i=0;i<5;i++){
     const b = document.createElement("div");
     b.className = "card back";
-    if(myHand[i]) b.innerHTML = "<span>?</span>"; else b.style.opacity=".25";
+    if(myHandIds[i]) b.innerHTML = "<span>?</span>"; else b.style.opacity=".25";
     backs.appendChild(b);
   }
   stage.appendChild(backs);
 
-  const oppReady = players[opp] && players[opp].ready5;
+  const oppPlayer = players[opp];
+  const oppReady = oppPlayer && oppPlayer.ready5;
   const w = document.createElement("div");
   w.className = "waiting";
   if(iAmReady && !oppReady) w.textContent = "Περιμένεις τον αντίπαλο να ολοκληρώσει το draft...";
@@ -359,10 +323,13 @@ function renderDraft(board, players){
   }
 }
 
-function renderSequence(board, players){
-  const myHand = myHandFromBoard(board);
-  const meReady = players[me] && players[me].seqReady;
-  const oppReady = players[opp] && players[opp].seqReady;
+function renderSequence(players){
+  const myPlayer = players[me];
+  const oppPlayer = players[opp];
+  const pool = myPlayer.pool;
+  const myHandIds = myPlayer.handIds || [];
+  const meReady = myPlayer.seqReady;
+  const oppReady = oppPlayer && oppPlayer.seqReady;
 
   if(meReady){
     stage.innerHTML = "";
@@ -396,8 +363,9 @@ function renderSequence(board, players){
 
   const row = document.createElement("div");
   row.className = "row";
-  myHand.forEach(c=>{
-    const placed = seq.includes(c.id);
+  myHandIds.forEach(id=>{
+    const c = pool[id];
+    const placed = seq.includes(id);
     const el = document.createElement("div");
     el.className = "card" + (placed?" disabled":"");
     el.innerHTML = `<img src="${CARD_IMG[c.type]}" alt="${c.type}"><div class="tag">${c.type}</div>`;
@@ -405,8 +373,8 @@ function renderSequence(board, players){
       if(placed) return;
       const firstEmpty = seq.indexOf(null);
       if(firstEmpty===-1) return;
-      seq[firstEmpty] = c.id;
-      render({phase:"sequence", players, board});
+      seq[firstEmpty] = id;
+      renderSequence(players);
     };
     row.appendChild(el);
   });
@@ -426,10 +394,10 @@ function renderSequence(board, players){
     num.className = "num"; num.textContent = i+1;
     s.appendChild(num);
     if(id){
-      const c = myHand.find(c=>c.id===id);
+      const c = pool[id];
       const img = document.createElement("img"); img.src = CARD_IMG[c.type];
       s.appendChild(img);
-      s.onclick = ()=>{ seq[i]=null; render({phase:"sequence", players, board}); };
+      s.onclick = ()=>{ seq[i]=null; renderSequence(players); };
     }
     slots.appendChild(s);
   });
@@ -446,8 +414,22 @@ function renderSequence(board, players){
   stage.appendChild(btn);
 }
 
+function computeScores(myPlayer, oppPlayer, uptoRound){
+  let myWins = 0, oppWins = 0;
+  for(let i=0;i<uptoRound;i++){
+    const myId = myPlayer.seq[i];
+    const oppId = oppPlayer.seq[i];
+    if(myId===undefined || oppId===undefined) continue;
+    const myType = myPlayer.pool[myId].type;
+    const oppType = oppPlayer.pool[oppId].type;
+    const res = beats(myType, oppType);
+    if(res==="win") myWins++;
+    else if(res==="lose") oppWins++;
+  }
+  return { myWins, oppWins };
+}
+
 function renderBattle(data){
-  const board = data.board;
   const players = data.players;
   const r = data.round || 0;
   const myPlayer = players[me];
@@ -456,15 +438,17 @@ function renderBattle(data){
 
   const myCardId = myPlayer.seq[r];
   const oppCardId = oppPlayer.seq[r];
-  const myCard = { id: myCardId, type: board[myCardId].type };
-  const oppCard = { id: oppCardId, type: board[oppCardId].type };
-
-  document.getElementById("scoreYou").textContent = myPlayer.wins || 0;
-  document.getElementById("scoreOpp").textContent = oppPlayer.wins || 0;
-  document.getElementById("roundNum").textContent = r+1;
+  const myType = myPlayer.pool[myCardId].type;
+  const oppType = oppPlayer.pool[oppCardId].type;
 
   const myRoundReady = myPlayer.roundReady && myPlayer.roundReady[r];
   const oppRoundReady = oppPlayer.roundReady && oppPlayer.roundReady[r];
+  const roundsDone = (myRoundReady && oppRoundReady) ? r+1 : r;
+  const { myWins, oppWins } = computeScores(myPlayer, oppPlayer, roundsDone);
+
+  document.getElementById("scoreYou").textContent = myWins;
+  document.getElementById("scoreOpp").textContent = oppWins;
+  document.getElementById("roundNum").textContent = r+1;
 
   stage.innerHTML = "";
   const label = document.createElement("div");
@@ -481,7 +465,7 @@ function renderBattle(data){
   const youCardEl = document.createElement("div");
   if(myRoundReady && oppRoundReady){
     youCardEl.className = "card";
-    youCardEl.innerHTML = `<img src="${CARD_IMG[myCard.type]}"><div class="tag">${myCard.type}</div>`;
+    youCardEl.innerHTML = `<img src="${CARD_IMG[myType]}"><div class="tag">${myType}</div>`;
   } else {
     youCardEl.className = "card back" + (myRoundReady?" selected":"");
     youCardEl.innerHTML = "<span>?</span>";
@@ -502,7 +486,7 @@ function renderBattle(data){
   const oppCardEl = document.createElement("div");
   if(myRoundReady && oppRoundReady){
     oppCardEl.className = "card";
-    oppCardEl.innerHTML = `<img src="${CARD_IMG[oppCard.type]}"><div class="tag">${oppCard.type}</div>`;
+    oppCardEl.innerHTML = `<img src="${CARD_IMG[oppType]}"><div class="tag">${oppType}</div>`;
   } else {
     oppCardEl.className = "card back";
     oppCardEl.innerHTML = "<span>?</span>";
@@ -520,7 +504,7 @@ function renderBattle(data){
     return;
   }
 
-  const res = beats(myCard.type, oppCard.type);
+  const res = beats(myType, oppType);
   let text, cls;
   if(res==="win"){ text="Κερδίζεις τον γύρο!"; cls="win"; }
   else if(res==="lose"){ text="Χάνεις τον γύρο."; cls="lose"; }
@@ -531,20 +515,18 @@ function renderBattle(data){
   banner.textContent = text;
   stage.appendChild(banner);
 
-  if(me==="p1"){
-    if(!myPlayer.__scored || myPlayer.__scored[r]===undefined){
-      if(res==="win") roomRef.child("players/p1/wins").transaction(v=>(v||0)+1);
-      if(res==="lose") roomRef.child("players/p2/wins").transaction(v=>(v||0)+1);
-    }
-  }
-
   const isLast = r>=4;
   const btn = document.createElement("button");
   btn.textContent = isLast ? "Δες αποτέλεσμα" : "Επόμενος γύρος";
+  let advanced = false;
   btn.onclick = ()=>{
-    if(me==="p1"){
-      if(isLast) roomRef.child("phase").set("done");
-      else roomRef.child("round").set(r+1);
+    if(advanced) return;
+    advanced = true;
+    btn.disabled = true;
+    if(isLast){
+      roomRef.child("phase").transaction(cur => cur === "battle" ? "done" : cur);
+    } else {
+      roomRef.child("round").transaction(cur => (cur||0) === r ? r+1 : cur);
     }
   };
   stage.appendChild(btn);
@@ -552,8 +534,7 @@ function renderBattle(data){
 
 function renderFinal(data){
   const players = data.players;
-  const myWins = players[me].wins || 0;
-  const oppWins = players[opp].wins || 0;
+  const { myWins, oppWins } = computeScores(players[me], players[opp], 5);
   document.getElementById("scoreYou").textContent = myWins;
   document.getElementById("scoreOpp").textContent = oppWins;
 
