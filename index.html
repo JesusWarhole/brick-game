@@ -103,6 +103,38 @@
   @media (max-width: 380px){
     .card, .slot{width:48px; height:66px;}
   }
+  .flipcard-outer{width:110px; height:150px; perspective:700px;}
+  .flipcard-inner{
+    position:relative; width:100%; height:100%; transition:transform .6s cubic-bezier(.4,.2,.2,1);
+    transform-style:preserve-3d;
+  }
+  .flipcard-inner.flipped{transform:rotateY(180deg);}
+  .flipcard-face{
+    position:absolute; inset:0; backface-visibility:hidden; border-radius:12px; overflow:hidden;
+    border:1px solid var(--line);
+  }
+  .flipcard-face.back{
+    display:flex; align-items:center; justify-content:center;
+    background:repeating-linear-gradient(45deg, #2a2b2f 0 10px, #232427 10px 20px);
+  }
+  .flipcard-face.back span{font-size:26px; color:var(--accent2); font-weight:700;}
+  .flipcard-face.front{transform:rotateY(180deg);}
+  .flipcard-face.front img{width:100%; height:100%; object-fit:cover; display:block;}
+  .flipcard-face .tag{
+    position:absolute; bottom:4px; left:4px; right:4px; text-align:center;
+    font-size:10px; letter-spacing:1px; background:rgba(0,0,0,.55); border-radius:6px; padding:2px 0; color:#fff;
+  }
+  .countdown-overlay{
+    font-size:48px; font-weight:700; color:var(--accent2); text-align:center;
+    min-height:64px; line-height:64px;
+  }
+  @media (max-width: 480px){
+    .flipcard-outer{width:56px; height:76px;}
+    .countdown-overlay{font-size:32px; min-height:44px; line-height:44px;}
+  }
+  @media (max-width: 380px){
+    .flipcard-outer{width:48px; height:66px;}
+  }
 </style>
 </head>
 <body>
@@ -184,11 +216,22 @@ function renderCreateLobby(){
   box.className = "lobby";
   box.innerHTML = `
     <div class="phase-label">Νέα παρτίδα</div>
-    <div class="hint" style="margin-bottom:0;">Φτιάξε δωμάτιο και στείλε το link στον φίλο σου.</div>
+    <div class="hint" style="margin-bottom:0;">Φτιάξε δωμάτιο και στείλε το link ή τον κωδικό στον φίλο σου.</div>
     <button id="createBtn">Δημιούργησε παρτίδα</button>
+    <div class="hint" style="margin:18px 0 6px;">— ή —</div>
+    <input id="codeInput" type="text" placeholder="Κωδικός δωματίου" maxlength="5" style="text-transform:uppercase;">
+    <button id="joinCodeBtn" class="ghost">Μπες με κωδικό</button>
   `;
   stage.appendChild(box);
   document.getElementById("createBtn").onclick = createRoom;
+  const codeInput = document.getElementById("codeInput");
+  codeInput.oninput = ()=>{ codeInput.value = codeInput.value.toUpperCase(); };
+  const doJoin = ()=>{
+    const code = codeInput.value.trim();
+    if(code.length===5) joinRoom(code);
+  };
+  document.getElementById("joinCodeBtn").onclick = doJoin;
+  codeInput.onkeydown = (e)=>{ if(e.key==="Enter") doJoin(); };
 }
 
 function createRoom(){
@@ -208,12 +251,20 @@ function createRoom(){
       <div class="phase-label">Περιμένουμε τον φίλο σου</div>
       <div class="hint" style="margin-bottom:6px;">Στείλε αυτό το link:</div>
       <div class="linkbox"><span id="linkText">${link}</span><button id="copyBtn">Copy</button></div>
-      <div class="waiting">Κωδικός δωματίου: <b>${room}</b></div>
+      <div class="hint" style="margin:14px 0 4px;">Ή απλά πες του τον κωδικό:</div>
+      <div class="linkbox" style="justify-content:center; gap:14px;">
+        <b style="font-size:20px; letter-spacing:3px;">${room}</b>
+        <button id="copyCodeBtn">Copy code</button>
+      </div>
     `;
     stage.appendChild(box);
     document.getElementById("copyBtn").onclick = ()=>{
       navigator.clipboard.writeText(link);
       document.getElementById("copyBtn").textContent = "Copied!";
+    };
+    document.getElementById("copyCodeBtn").onclick = ()=>{
+      navigator.clipboard.writeText(room);
+      document.getElementById("copyCodeBtn").textContent = "Copied!";
     };
     listenRoom();
   });
@@ -428,6 +479,12 @@ function renderSequence(players){
   stage.appendChild(btn);
 }
 
+function countRevealed(revealedObj){
+  let n = 0;
+  while(revealedObj && revealedObj[n]) n++;
+  return n;
+}
+
 function computeScores(myPlayer, oppPlayer, uptoRound){
   let myWins = 0, oppWins = 0;
   for(let i=0;i<uptoRound;i++){
@@ -443,6 +500,22 @@ function computeScores(myPlayer, oppPlayer, uptoRound){
   return { myWins, oppWins };
 }
 
+if(!window.__countdownRound) window.__countdownRound = -1;
+
+function startLocalCountdown(r, numEl, onDone){
+  let n = 3;
+  const tick = ()=>{
+    if(numEl) numEl.textContent = n>0 ? n : "";
+    if(n<=0){
+      onDone();
+      return;
+    }
+    n--;
+    setTimeout(tick, 1000);
+  };
+  tick();
+}
+
 function renderBattle(data){
   const players = data.players;
   const r = data.round || 0;
@@ -455,10 +528,10 @@ function renderBattle(data){
   const myType = myPlayer.pool[myCardId].type;
   const oppType = oppPlayer.pool[oppCardId].type;
 
-  const myRoundReady = myPlayer.roundReady && myPlayer.roundReady[r];
-  const oppRoundReady = oppPlayer.roundReady && oppPlayer.roundReady[r];
-  const roundsDone = (myRoundReady && oppRoundReady) ? r+1 : r;
-  const { myWins, oppWins } = computeScores(myPlayer, oppPlayer, roundsDone);
+  const countdownOn = !!(data.countdown && data.countdown[r]);
+  const revealed = !!(data.revealed && data.revealed[r]);
+  const revealedSoFar = countRevealed(data.revealed) + (revealed?0:0);
+  const { myWins, oppWins } = computeScores(myPlayer, oppPlayer, countRevealed(data.revealed));
 
   document.getElementById("scoreYou").textContent = myWins;
   document.getElementById("scoreOpp").textContent = oppWins;
@@ -473,48 +546,66 @@ function renderBattle(data){
   const arena = document.createElement("div");
   arena.className = "arena";
 
+  function makeFlipCard(type, flippedNow){
+    const outer = document.createElement("div");
+    outer.className = "flipcard-outer";
+    const inner = document.createElement("div");
+    inner.className = "flipcard-inner" + (flippedNow ? " flipped" : "");
+    const back = document.createElement("div");
+    back.className = "flipcard-face back";
+    back.innerHTML = "<span>?</span>";
+    const front = document.createElement("div");
+    front.className = "flipcard-face front";
+    front.innerHTML = `<img src="${CARD_IMG[type]}"><div class="tag">${type}</div>`;
+    inner.appendChild(back); inner.appendChild(front);
+    outer.appendChild(inner);
+    return { outer, inner };
+  }
+
   const youWrap = document.createElement("div");
   youWrap.className = "fighter";
   youWrap.innerHTML = `<div class="who">ΕΣΥ</div>`;
-  const youCardEl = document.createElement("div");
-  if(myRoundReady && oppRoundReady){
-    youCardEl.className = "card";
-    youCardEl.innerHTML = `<img src="${CARD_IMG[myType]}"><div class="tag">${myType}</div>`;
-  } else {
-    youCardEl.className = "card back" + (myRoundReady?" selected":"");
-    youCardEl.innerHTML = "<span>?</span>";
-    if(!myRoundReady){
-      youCardEl.style.cursor = "pointer";
-      youCardEl.onclick = ()=>{
-        roomRef.child("players/"+me+"/roundReady/"+r).set(true);
-      };
-    }
+  const youFlip = makeFlipCard(myType, revealed);
+  if(!countdownOn && !revealed){
+    youFlip.outer.style.cursor = "pointer";
+    youFlip.outer.onclick = ()=>{
+      roomRef.child("countdown/"+r).transaction(cur => cur || true);
+    };
   }
-  youWrap.appendChild(youCardEl);
+  youWrap.appendChild(youFlip.outer);
 
+  const vsWrap = document.createElement("div");
+  vsWrap.style.display = "flex"; vsWrap.style.flexDirection = "column"; vsWrap.style.alignItems = "center";
   const vs = document.createElement("div"); vs.className="vs"; vs.textContent="VS";
+  const countdownNum = document.createElement("div");
+  countdownNum.className = "countdown-overlay";
+  vsWrap.appendChild(vs);
+  vsWrap.appendChild(countdownNum);
 
   const oppWrap = document.createElement("div");
   oppWrap.className = "fighter";
   oppWrap.innerHTML = `<div class="who">ΑΝΤΙΠΑΛΟΣ</div>`;
-  const oppCardEl = document.createElement("div");
-  if(myRoundReady && oppRoundReady){
-    oppCardEl.className = "card";
-    oppCardEl.innerHTML = `<img src="${CARD_IMG[oppType]}"><div class="tag">${oppType}</div>`;
-  } else {
-    oppCardEl.className = "card back";
-    oppCardEl.innerHTML = "<span>?</span>";
-  }
-  oppWrap.appendChild(oppCardEl);
+  const oppFlip = makeFlipCard(oppType, revealed);
+  oppWrap.appendChild(oppFlip.outer);
 
-  arena.appendChild(youWrap); arena.appendChild(vs); arena.appendChild(oppWrap);
+  arena.appendChild(youWrap); arena.appendChild(vsWrap); arena.appendChild(oppWrap);
   stage.appendChild(arena);
 
-  if(!(myRoundReady && oppRoundReady)){
+  if(!countdownOn && !revealed){
     const w = document.createElement("div");
     w.className = "waiting";
-    w.textContent = myRoundReady ? "Περιμένεις τον αντίπαλο..." : `Πάτα την κάρτα Νο${r+1} σου όταν είσαι έτοιμος.`;
+    w.textContent = `Πάτα την κάρτα Νο${r+1} σου για να ξεκινήσει η αντίστροφη μέτρηση.`;
     stage.appendChild(w);
+    return;
+  }
+
+  if(countdownOn && !revealed){
+    if(window.__countdownRound !== r){
+      window.__countdownRound = r;
+      startLocalCountdown(r, countdownNum, ()=>{
+        roomRef.child("revealed/"+r).transaction(cur => cur || true);
+      });
+    }
     return;
   }
 
@@ -537,6 +628,7 @@ function renderBattle(data){
     if(advanced) return;
     advanced = true;
     btn.disabled = true;
+    window.__countdownRound = -1;
     if(isLast){
       roomRef.child("phase").transaction(cur => cur === "battle" ? "done" : cur);
     } else {
